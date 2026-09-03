@@ -1,0 +1,693 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>電子發票掃描</title>
+
+  <!-- 換回 jsQR，這是不依賴 Web Worker 的穩定選擇，完美避開 CORS 報錯 -->
+  <script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.min.js"></script>
+  
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;500;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+  
+  <style>
+    :root{
+      --bg:#EEEBE0;
+      --paper:#FFFFFF;
+      --ink:#1F1D19;
+      --muted:#8C8776;
+      --line:#D8D3C4;
+      --accent:#0B6E4F;
+      --accent-ink:#FFFFFF;
+      --accent-soft:#E3EFE9;
+      --danger:#B23A2E;
+      --danger-soft:#F6E7E4;
+    }
+    body { margin: 0; background: var(--bg); }
+    #einv-app{
+      font-family:'Noto Sans TC',sans-serif;
+      color:var(--ink);
+      background:var(--bg);
+      max-width:480px;
+      margin:0 auto;
+      padding:20px 16px 40px;
+      box-sizing:border-box;
+      -webkit-tap-highlight-color:transparent;
+    }
+    #einv-app *{box-sizing:border-box;}
+    .einv-mono{font-family:'IBM Plex Mono',monospace;}
+    .einv-header{margin-bottom:18px;}
+    .einv-header h1{font-size:20px;font-weight:700;margin:0 0 4px;letter-spacing:.2px;}
+    .einv-header p{font-size:13px;color:var(--muted);margin:0;line-height:1.6;}
+  
+    .einv-actions{display:flex;gap:8px;margin-bottom:12px;}
+    .einv-btn{
+      flex:1; display:flex;align-items:center;justify-content:center;gap:6px;
+      padding:12px 10px; border-radius:10px; border:1px solid var(--line);
+      background:var(--paper); color:var(--ink);
+      font-family:'Noto Sans TC',sans-serif; font-size:14px;font-weight:500;
+      cursor:pointer; transition:border-color .15s ease, background .15s ease;
+    }
+    .einv-btn:active{transform:scale(.98);}
+    .einv-btn.primary{background:var(--accent);border-color:var(--accent);color:var(--accent-ink);}
+    .einv-btn.text{border:none;background:none;color:var(--accent);padding:8px 6px;font-size:13px;flex:none;}
+    .einv-btn.danger-text{border:none;background:none;color:var(--danger);padding:8px 6px;font-size:13px;flex:none;}
+    .einv-btn:disabled{opacity:.5;cursor:default;}
+  
+    .einv-panel{
+      background:var(--paper); border:1px solid var(--line);
+      border-radius:12px; padding:14px; margin-bottom:14px;
+    }
+    .einv-panel h3{font-size:13px;font-weight:500;margin:0 0 10px;color:var(--muted);}
+  
+    #einv-manual-fields{display:none;flex-direction:column;gap:8px;}
+    #einv-manual-fields.open{display:flex;}
+    .einv-field{display:flex;flex-direction:column;gap:4px;}
+    .einv-field label{font-size:12px;color:var(--muted);}
+    .einv-field input{
+      font-family:'IBM Plex Mono',monospace; font-size:14px;
+      padding:9px 10px; border-radius:8px; border:1px solid var(--line);
+      background:var(--bg); color:var(--ink);
+    }
+    .einv-field input:focus{outline:none;border-color:var(--accent);}
+  
+    #einv-status{
+      font-size:13px; line-height:1.6; padding:10px 12px;
+      border-radius:8px; margin-bottom:12px; display:none;
+    }
+    #einv-status.show{display:block;}
+    #einv-status.info{background:var(--accent-soft);color:var(--accent);}
+    #einv-status.error{background:var(--danger-soft);color:var(--danger);}
+  
+    #einv-video-wrap{display:none;margin-bottom:12px;border-radius:12px;overflow:hidden;position:relative;background:#000;}
+    #einv-video-wrap.open{display:block;}
+    #einv-video{width:100%;display:block;}
+    #einv-video-close{
+      position:absolute;top:8px;right:8px; width:30px;height:30px;border-radius:50%;
+      background:rgba(0,0,0,.55);color:#fff;border:none;
+      display:flex;align-items:center;justify-content:center;
+      font-size:16px;cursor:pointer;
+    }
+  
+    #einv-preview{display:none;}
+    #einv-preview.open{display:block;}
+    #einv-preview .row{display:flex;justify-content:space-between;padding:5px 0;font-size:13px;border-bottom:1px dashed var(--line);}
+    #einv-preview .row:last-child{border-bottom:none;}
+    #einv-preview .row .k{color:var(--muted);}
+    #einv-preview .row .v{font-family:'IBM Plex Mono',monospace;text-align:right;}
+    #einv-preview .amt{font-size:20px;font-weight:600;}
+    #einv-preview-actions{display:flex;gap:8px;margin-top:12px;}
+  
+    .einv-summary{
+      display:flex;justify-content:space-between;align-items:baseline;
+      margin-bottom:10px;padding:0 2px;
+    }
+    .einv-summary .count{font-size:13px;color:var(--muted);}
+    .einv-summary .total{font-size:22px;font-weight:600;}
+    .einv-summary .total span{font-size:13px;color:var(--muted);font-weight:400;margin-right:4px;}
+  
+    .einv-toolbar{display:flex;gap:14px;margin-bottom:14px;padding:0 2px;}
+  
+    #einv-list{display:flex;flex-direction:column;gap:10px;}
+    .einv-card{
+      background:var(--paper); border:1px solid var(--line);
+      border-radius:10px; padding:12px 14px; position:relative;
+    }
+    .einv-card::before{
+      content:""; position:absolute;left:14px;right:14px;bottom:-1px;
+      border-bottom:1px dashed var(--line);
+    }
+    .einv-card-top{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:8px;}
+    .einv-card-no{font-family:'IBM Plex Mono',monospace;font-size:14px;font-weight:600;letter-spacing:.5px;}
+    .einv-card-date{font-size:12px;color:var(--muted);margin-top:2px;}
+    .einv-card-amt{font-family:'IBM Plex Mono',monospace;font-size:18px;font-weight:600;text-align:right;white-space:nowrap;}
+    .einv-card-meta{font-size:12px;color:var(--muted);display:flex;gap:14px;flex-wrap:wrap;}
+    .einv-card-del{
+      position:absolute;top:10px;right:10px; width:24px;height:24px;border-radius:6px;
+      border:none;background:none;color:var(--muted);
+      font-size:14px;cursor:pointer;line-height:1; display:flex;align-items:center;justify-content:center;
+    }
+    .einv-card-del:hover{background:var(--danger-soft);color:var(--danger);}
+  
+    #einv-empty{
+      text-align:center;padding:36px 16px;color:var(--muted);font-size:13px;
+      border:1px dashed var(--line);border-radius:12px;
+    }
+  
+    #einv-copy-modal{
+      display:none; position:fixed;inset:0; background:rgba(0,0,0,.45);
+      align-items:center;justify-content:center; z-index:9999;padding:20px;
+    }
+    #einv-copy-modal.open{display:flex;}
+    .einv-copy-box{
+      background:var(--paper);border-radius:12px;padding:16px;
+      max-width:440px;width:100%;max-height:70vh;display:flex;flex-direction:column;
+    }
+    .einv-copy-box h3{font-size:14px;font-weight:500;margin:0 0 8px;}
+    .einv-copy-box textarea{
+      flex:1;min-height:200px; font-family:'IBM Plex Mono',monospace;font-size:12px;
+      border:1px solid var(--line);border-radius:8px;padding:10px;
+      background:var(--bg);color:var(--ink);resize:vertical;
+    }
+    .einv-copy-actions{display:flex;gap:8px;margin-top:10px;}
+    #einv-file-input{display:none;}
+  </style>
+</head>
+<body>
+
+<div id="einv-app">
+  <div class="einv-header">
+    <h1>電子發票掃描</h1>
+    <p>拍下發票證明聯左側的 QR Code，自動讀出日期與金額，整理成清單。</p>
+  </div>
+
+  <div id="einv-status"></div>
+
+  <div id="einv-video-wrap">
+    <video id="einv-video" playsinline muted></video>
+    <button id="einv-video-close" aria-label="關閉相機">✕</button>
+  </div>
+
+  <div class="einv-actions">
+    <button class="einv-btn primary" id="einv-btn-camera">📷 即時掃描</button>
+    <button class="einv-btn" id="einv-btn-photo">🖼 拍照 / 選圖</button>
+  </div>
+  <div class="einv-actions" style="margin-bottom:14px;">
+    <button class="einv-btn text" id="einv-btn-paste" style="flex:1;">貼上 QR 文字內容</button>
+    <button class="einv-btn text" id="einv-btn-manual" style="flex:1;">手動輸入</button>
+  </div>
+
+  <div class="einv-panel" id="einv-paste-panel" style="display:none;">
+    <h3>貼上左側 QR Code 解碼內容</h3>
+    <textarea id="einv-paste-input" rows="3" placeholder="例如：AB123456781140821123400000350000003500000000000..." style="width:100%;font-family:'IBM Plex Mono',monospace;font-size:12px;padding:8px;border-radius:8px;border:1px solid var(--line);background:var(--bg);color:var(--ink);"></textarea>
+    <div style="display:flex;gap:8px;margin-top:8px;">
+      <button class="einv-btn primary" id="einv-btn-parse-paste">解析</button>
+      <button class="einv-btn" id="einv-btn-cancel-paste">取消</button>
+    </div>
+  </div>
+
+  <div class="einv-panel" id="einv-manual-panel" style="display:none;">
+    <h3>手動輸入發票資訊</h3>
+    <div id="einv-manual-fields" class="open">
+      <div class="einv-field">
+        <label>發票號碼（2碼英文＋8碼數字）</label>
+        <input type="text" id="einv-m-no" maxlength="10" placeholder="AB12345678">
+      </div>
+      <div class="einv-field">
+        <label>開立日期</label>
+        <input type="date" id="einv-m-date">
+      </div>
+      <div class="einv-field">
+        <label>含稅總計金額（NT$）</label>
+        <input type="number" id="einv-m-total" placeholder="350">
+      </div>
+      <div class="einv-field">
+        <label>隨機碼（選填）</label>
+        <input type="text" id="einv-m-random" maxlength="4" placeholder="1234">
+      </div>
+    </div>
+    <div style="display:flex;gap:8px;margin-top:10px;">
+      <button class="einv-btn primary" id="einv-btn-manual-add">加入清單</button>
+      <button class="einv-btn" id="einv-btn-cancel-manual">取消</button>
+    </div>
+  </div>
+
+  <div class="einv-panel" id="einv-preview">
+    <h3>掃描結果</h3>
+    <div id="einv-preview-body"></div>
+    <div id="einv-preview-actions">
+      <button class="einv-btn primary" id="einv-btn-confirm-add">加入清單</button>
+      <button class="einv-btn" id="einv-btn-discard">捨棄</button>
+    </div>
+  </div>
+
+  <input type="file" id="einv-file-input" accept="image/*" capture="environment">
+  <canvas id="einv-canvas" style="display:none;"></canvas>
+
+  <div class="einv-summary">
+    <div>
+      <div class="total"><span>合計</span>NT$ <span id="einv-total">0</span></div>
+      <div class="count" id="einv-count">尚未掃描任何發票</div>
+    </div>
+  </div>
+
+  <div class="einv-toolbar">
+    <button class="einv-btn text" id="einv-btn-copy-tsv">複製為表格文字</button>
+    <button class="einv-btn text" id="einv-btn-copy-json">複製為 JSON</button>
+    <button class="einv-btn danger-text" id="einv-btn-clear">清空全部</button>
+  </div>
+
+  <div id="einv-list"></div>
+  <div id="einv-empty" style="display:none;">還沒有發票紀錄。點上方「拍照 / 選圖」或「即時掃描」開始。</div>
+</div>
+
+<div id="einv-copy-modal">
+  <div class="einv-copy-box">
+    <h3 id="einv-copy-title">複製資料</h3>
+    <textarea id="einv-copy-text" readonly></textarea>
+    <div class="einv-copy-actions">
+      <button class="einv-btn primary" id="einv-btn-do-copy">複製到剪貼簿</button>
+      <button class="einv-btn" id="einv-btn-close-copy">關閉</button>
+    </div>
+  </div>
+</div>
+
+<script>
+(function(){
+  var STORAGE_KEY = 'einvoice-records';
+  var invoices = [];
+  var pendingRecord = null;
+  var stream = null;
+  var scanLoopId = null;
+
+  var els = {
+    status: document.getElementById('einv-status'),
+    videoWrap: document.getElementById('einv-video-wrap'),
+    video: document.getElementById('einv-video'),
+    canvas: document.getElementById('einv-canvas'),
+    fileInput: document.getElementById('einv-file-input'),
+    preview: document.getElementById('einv-preview'),
+    previewBody: document.getElementById('einv-preview-body'),
+    pastePanel: document.getElementById('einv-paste-panel'),
+    pasteInput: document.getElementById('einv-paste-input'),
+    manualPanel: document.getElementById('einv-manual-panel'),
+    list: document.getElementById('einv-list'),
+    empty: document.getElementById('einv-empty'),
+    total: document.getElementById('einv-total'),
+    count: document.getElementById('einv-count'),
+    copyModal: document.getElementById('einv-copy-modal'),
+    copyTitle: document.getElementById('einv-copy-title'),
+    copyText: document.getElementById('einv-copy-text')
+  };
+
+  function showStatus(msg, type){
+    els.status.textContent = msg;
+    els.status.className = 'show ' + (type || 'info');
+  }
+  function hideStatus(){
+    els.status.className = '';
+  }
+
+  function fmtMoney(n){
+    return Number(n || 0).toLocaleString('zh-TW');
+  }
+
+  // ---------- 修復：改成標準 localStorage API ----------
+  async function loadInvoices(){
+    try{
+      var res = localStorage.getItem(STORAGE_KEY);
+      if(res){
+        invoices = JSON.parse(res);
+      }
+    }catch(e){
+      invoices = [];
+    }
+    render();
+  }
+
+  async function saveInvoices(){
+    try{
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(invoices));
+    }catch(e){
+      showStatus('儲存時發生錯誤，資料可能不會保留。', 'error');
+    }
+  }
+
+  // ---------- parsing ----------
+  function parseLeftQR(raw){
+    var text = (raw || '').replace(/\s+/g, '');
+    if(text.length < 77){
+      throw new Error('內容長度不足 77 碼，可能不是發票左側 QR Code，或掃描到右側 QR Code（品項明細）。');
+    }
+    var invoiceNumber = text.slice(0, 10);
+    if(!/^[A-Za-z]{2}\d{8}$/.test(invoiceNumber)){
+      throw new Error('發票號碼格式不正確，請確認掃描的是左側 QR Code。');
+    }
+    var dateStr = text.slice(10, 17);
+    var rocYear = parseInt(dateStr.slice(0, 3), 10);
+    var month = dateStr.slice(3, 5);
+    var day = dateStr.slice(5, 7);
+    if(!rocYear || !month || !day){
+      throw new Error('發票日期欄位無法解析。');
+    }
+    var westYear = rocYear + 1911;
+    var mm = month.padStart(2, '0');
+    var dd = day.padStart(2, '0');
+    var dateISO = westYear + '-' + mm + '-' + dd;
+
+    var randomCode = text.slice(17, 21);
+    var salesHex = text.slice(21, 29);
+    var totalHex = text.slice(29, 37);
+
+    var salesAmount = parseInt(salesHex, 16);
+    var totalAmount = parseInt(totalHex, 16);
+
+    if(isNaN(salesAmount) || isNaN(totalAmount)){
+      throw new Error('金額欄位無法解析為數字。');
+    }
+
+    return {
+      source: 'qr', invoiceNumber: invoiceNumber, dateISO: dateISO,
+      randomCode: randomCode, salesAmount: salesAmount, totalAmount: totalAmount, raw: text
+    };
+  }
+
+  // ---------- 修復：重建 jsQR 的選圖解碼邏輯 ----------
+  function decodeFile(file){
+    return new Promise(function(resolve, reject){
+      if(typeof jsQR === 'undefined'){
+        return reject(new Error('QR 解碼元件尚未載入，請確認網路連線。'));
+      }
+      var img = new Image();
+      var url = URL.createObjectURL(file);
+      img.onload = function(){
+        try{
+          var canvas = els.canvas;
+          // 縮小圖片尺寸避免手機記憶體爆炸
+          var scale = Math.min(1, 1200 / Math.max(img.width, img.height));
+          canvas.width = Math.round(img.width * scale);
+          canvas.height = Math.round(img.height * scale);
+          var ctx = canvas.getContext('2d');
+          ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+          var imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+          URL.revokeObjectURL(url);
+          
+          var code = jsQR(imageData.data, imageData.width, imageData.height, {
+            inversionAttempts: "dontInvert"
+          });
+          
+          resolve(code ? code.data : null);
+        }catch(e){
+          URL.revokeObjectURL(url);
+          reject(e);
+        }
+      };
+      img.onerror = function(){
+        URL.revokeObjectURL(url);
+        reject(new Error('圖片讀取失敗。'));
+      };
+      img.src = url;
+    });
+  }
+
+  // ---------- preview ----------
+  function showPreview(record){
+    pendingRecord = record;
+    var rows = [
+      ['發票號碼', record.invoiceNumber, true],
+      ['開立日期', record.dateISO],
+      ['隨機碼', record.randomCode || '-'],
+      ['未稅銷售額', 'NT$ ' + fmtMoney(record.salesAmount)],
+      ['含稅總計', 'NT$ ' + fmtMoney(record.totalAmount), false, true]
+    ];
+    var html = '';
+    rows.forEach(function(r){
+      var cls = r[3] ? 'v amt' : 'v';
+      html += '<div class="row"><span class="k">' + r[0] + '</span><span class="' + cls + '">' + r[1] + '</span></div>';
+    });
+    els.previewBody.innerHTML = html;
+    els.preview.classList.add('open');
+    els.preview.scrollIntoView({behavior:'smooth', block:'nearest'});
+  }
+
+  function hidePreview(){
+    pendingRecord = null;
+    els.preview.classList.remove('open');
+  }
+
+  async function confirmAdd(){
+    if(!pendingRecord) return;
+    var record = pendingRecord;
+    var existingIndex = invoices.findIndex(function(inv){ return inv.invoiceNumber === record.invoiceNumber; });
+    if(existingIndex >= 0){
+      var ok = window.confirm('發票號碼 ' + record.invoiceNumber + ' 已存在清單中，是否要覆蓋原本的紀錄？');
+      if(!ok){ hidePreview(); return; }
+      record.id = invoices[existingIndex].id;
+      invoices[existingIndex] = record;
+    }else{
+      record.id = 'inv_' + Date.now() + '_' + Math.random().toString(36).slice(2, 7);
+      invoices.unshift(record);
+    }
+    hidePreview(); hideStatus(); render();
+    await saveInvoices();
+  }
+
+  // ---------- render ----------
+  function render(){
+    invoices.sort(function(a, b){
+      if(a.dateISO === b.dateISO) return 0;
+      return a.dateISO < b.dateISO ? 1 : -1;
+    });
+
+    var total = invoices.reduce(function(sum, inv){ return sum + (inv.totalAmount || 0); }, 0);
+    els.total.textContent = fmtMoney(total);
+    els.count.textContent = invoices.length === 0 ? '尚未掃描任何發票' : ('共 ' + invoices.length + ' 筆');
+
+    if(invoices.length === 0){
+      els.list.innerHTML = '';
+      els.empty.style.display = 'block';
+      return;
+    }
+    els.empty.style.display = 'none';
+
+    var html = '';
+    invoices.forEach(function(inv){
+      html += '<div class="einv-card" data-id="' + inv.id + '">' +
+        '<button class="einv-card-del" data-del="' + inv.id + '" aria-label="刪除">✕</button>' +
+        '<div class="einv-card-top">' +
+          '<div>' +
+            '<div class="einv-card-no">' + inv.invoiceNumber + '</div>' +
+            '<div class="einv-card-date">' + inv.dateISO + (inv.source === 'manual' ? '・手動輸入' : '') + '</div>' +
+          '</div>' +
+          '<div class="einv-card-amt">NT$ ' + fmtMoney(inv.totalAmount) + '</div>' +
+        '</div>' +
+        '<div class="einv-card-meta">' +
+          (inv.randomCode ? '<span>隨機碼 ' + inv.randomCode + '</span>' : '') +
+          (inv.salesAmount != null && inv.source === 'qr' ? '<span>未稅 NT$ ' + fmtMoney(inv.salesAmount) + '</span>' : '') +
+        '</div>' +
+      '</div>';
+    });
+    els.list.innerHTML = html;
+  }
+
+  els.list.addEventListener('click', async function(e){
+    var btn = e.target.closest('[data-del]');
+    if(!btn) return;
+    var id = btn.getAttribute('data-del');
+    var idx = invoices.findIndex(function(inv){ return inv.id === id; });
+    if(idx < 0) return;
+    var ok = window.confirm('確定要刪除發票 ' + invoices[idx].invoiceNumber + ' 嗎？');
+    if(!ok) return;
+    invoices.splice(idx, 1);
+    render();
+    await saveInvoices();
+  });
+
+  // ---------- 修復：重建鏡頭掃描，並加入 HTTPS 權限提醒 ----------
+  var scanning = false;
+  async function startCamera(){
+    closePastePanel(); closeManualPanel(); hidePreview(); hideStatus();
+    
+    // 檢查瀏覽器是否因為 file:/// 或無 HTTPS 而阻擋相機
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+      showStatus('⚠️ 瀏覽器安全限制：手機直接點開本地端 HTML 檔 (file://) 無法使用相機。請改用「拍照 / 選圖」功能。(若要使用相機，請將檔案丟上 GitHub Pages 或 Vercel)', 'error');
+      return;
+    }
+
+    try{
+      stream = await navigator.mediaDevices.getUserMedia({video:{facingMode:{ideal:'environment'}}});
+    }catch(e){
+      showStatus('無法存取相機權限，請確認是否已允許。', 'error');
+      return;
+    }
+    
+    els.video.srcObject = stream;
+    els.video.setAttribute("playsinline", true); // iOS 必備
+    await els.video.play();
+    els.videoWrap.classList.add('open');
+    scanning = true;
+    scanLoop();
+  }
+
+  function stopCamera(){
+    scanning = false;
+    if(scanLoopId) cancelAnimationFrame(scanLoopId);
+    if(stream){
+      stream.getTracks().forEach(function(t){ t.stop(); });
+      stream = null;
+    }
+    els.videoWrap.classList.remove('open');
+  }
+
+  function scanLoop(){
+    if(!scanning) return;
+    var video = els.video;
+    if(video.readyState === video.HAVE_ENOUGH_DATA){
+      var canvas = els.canvas;
+      canvas.width = video.videoWidth;
+      canvas.height = video.videoHeight;
+      var ctx = canvas.getContext('2d');
+      ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+      try{
+        var imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+        if(typeof jsQR !== 'undefined'){
+            var code = jsQR(imageData.data, imageData.width, imageData.height, {
+              inversionAttempts: "dontInvert"
+            });
+            if(code && code.data){
+              try{
+                var record = parseLeftQR(code.data);
+                stopCamera();
+                showPreview(record);
+                return;
+              }catch(parseErr){ }
+            }
+        }
+      }catch(err){}
+    }
+    scanLoopId = requestAnimationFrame(scanLoop);
+  }
+
+  // ---------- panels ----------
+  function closePastePanel(){ els.pastePanel.style.display = 'none'; }
+  function closeManualPanel(){ els.manualPanel.style.display = 'none'; }
+
+  // ---------- copy helpers ----------
+  function buildTSV(){
+    var header = ['發票號碼','日期','隨機碼','未稅銷售額','含稅總計','買方統編','賣方統編'].join('\t');
+    var rows = invoices.map(function(inv){
+      return [
+        inv.invoiceNumber, inv.dateISO, inv.randomCode || '',
+        inv.salesAmount != null ? inv.salesAmount : '',
+        inv.totalAmount != null ? inv.totalAmount : '',
+        inv.buyerId || '', inv.sellerId || ''
+      ].join('\t');
+    });
+    return [header].concat(rows).join('\n');
+  }
+
+  function openCopyModal(title, text){
+    els.copyTitle.textContent = title;
+    els.copyText.value = text;
+    els.copyModal.classList.add('open');
+    els.copyText.focus(); els.copyText.select();
+  }
+
+  // ---------- wire up buttons ----------
+  document.getElementById('einv-btn-camera').addEventListener('click', startCamera);
+  document.getElementById('einv-video-close').addEventListener('click', stopCamera);
+
+  document.getElementById('einv-btn-photo').addEventListener('click', function(){ els.fileInput.click(); });
+  
+  els.fileInput.addEventListener('change', async function(e){
+    var file = e.target.files && e.target.files[0];
+    e.target.value = '';
+    if(!file) return;
+    hideStatus();
+    showStatus('正在辨識圖片中的 QR Code…', 'info');
+    try{
+      var text = await decodeFile(file);
+      if(!text){
+        showStatus('找不到 QR Code，請確保發票左側的 QR Code 完整清晰。', 'error');
+        return;
+      }
+      var record = parseLeftQR(text);
+      hideStatus(); showPreview(record);
+    }catch(err){
+      showStatus(err.message || '解析失敗，請重新選擇圖片。', 'error');
+    }
+  });
+
+  document.getElementById('einv-btn-paste').addEventListener('click', function(){
+    closeManualPanel(); hidePreview(); els.pastePanel.style.display = 'block';
+  });
+  document.getElementById('einv-btn-cancel-paste').addEventListener('click', function(){
+    closePastePanel(); els.pasteInput.value = '';
+  });
+  document.getElementById('einv-btn-parse-paste').addEventListener('click', function(){
+    hideStatus();
+    try{
+      var record = parseLeftQR(els.pasteInput.value);
+      closePastePanel(); els.pasteInput.value = ''; showPreview(record);
+    }catch(err){ showStatus(err.message, 'error'); }
+  });
+
+  document.getElementById('einv-btn-manual').addEventListener('click', function(){
+    closePastePanel(); hidePreview(); els.manualPanel.style.display = 'block';
+  });
+  document.getElementById('einv-btn-cancel-manual').addEventListener('click', closeManualPanel);
+  
+  document.getElementById('einv-btn-manual-add').addEventListener('click', async function(){
+    hideStatus();
+    var no = document.getElementById('einv-m-no').value.trim().toUpperCase();
+    var date = document.getElementById('einv-m-date').value;
+    var total = document.getElementById('einv-m-total').value;
+    var random = document.getElementById('einv-m-random').value.trim();
+
+    if(!/^[A-Za-z]{2}\d{8}$/.test(no)){
+      showStatus('發票號碼格式不正確，例如 AB12345678。', 'error'); return;
+    }
+    if(!date){ showStatus('請輸入開立日期。', 'error'); return; }
+    if(total === '' || isNaN(Number(total))){ showStatus('請輸入總計金額。', 'error'); return; }
+
+    var record = {
+      source: 'manual', invoiceNumber: no, dateISO: date, randomCode: random,
+      salesAmount: null, totalAmount: Number(total), buyerId: '', sellerId: ''
+    };
+
+    var existingIndex = invoices.findIndex(function(inv){ return inv.invoiceNumber === no; });
+    if(existingIndex >= 0){
+      var ok = window.confirm('發票號碼 ' + no + ' 已存在清單中，是否要覆蓋原本的紀錄？');
+      if(!ok) return;
+      record.id = invoices[existingIndex].id;
+      invoices[existingIndex] = record;
+    }else{
+      record.id = 'inv_' + Date.now() + '_' + Math.random().toString(36).slice(2, 7);
+      invoices.unshift(record);
+    }
+    document.getElementById('einv-m-no').value = '';
+    document.getElementById('einv-m-date').value = '';
+    document.getElementById('einv-m-total').value = '';
+    document.getElementById('einv-m-random').value = '';
+    closeManualPanel(); render(); await saveInvoices();
+  });
+
+  document.getElementById('einv-btn-confirm-add').addEventListener('click', confirmAdd);
+  document.getElementById('einv-btn-discard').addEventListener('click', hidePreview);
+
+  document.getElementById('einv-btn-copy-tsv').addEventListener('click', function(){
+    if(invoices.length === 0){ showStatus('清單目前是空的。', 'error'); return; }
+    openCopyModal('表格文字（可直接貼到 Excel）', buildTSV());
+  });
+  
+  document.getElementById('einv-btn-copy-json').addEventListener('click', function(){
+    if(invoices.length === 0){ showStatus('清單目前是空的。', 'error'); return; }
+    openCopyModal('JSON 資料', JSON.stringify(invoices, null, 2));
+  });
+  
+  document.getElementById('einv-btn-do-copy').addEventListener('click', async function(){
+    try{
+      await navigator.clipboard.writeText(els.copyText.value);
+      var btn = document.getElementById('einv-btn-do-copy');
+      var original = btn.textContent;
+      btn.textContent = '已複製';
+      setTimeout(function(){ btn.textContent = original; }, 1200);
+    }catch(e){
+      els.copyText.focus(); els.copyText.select();
+    }
+  });
+  
+  document.getElementById('einv-btn-close-copy').addEventListener('click', function(){ els.copyModal.classList.remove('open'); });
+  document.getElementById('einv-btn-clear').addEventListener('click', async function(){
+    if(invoices.length === 0) return;
+    var ok = window.confirm('確定要清空全部 ' + invoices.length + ' 筆發票紀錄嗎？此動作無法復原。');
+    if(!ok) return;
+    invoices = []; render(); await saveInvoices();
+  });
+
+  loadInvoices();
+})();
+</script>
+</body>
+</html>
