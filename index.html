@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-  <title>電子發票掃描與明細擷取</title>
+  <title>電子發票 - 雙 QR 完整明細解析</title>
 
   <script src="https://unpkg.com/html5-qrcode" type="text/javascript"></script>
   <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -44,17 +44,6 @@
     }
     .einv-panel h3{font-size:13px;font-weight:500;margin:0 0 10px;color:var(--muted);}
   
-    #einv-manual-fields{display:none;flex-direction:column;gap:8px;}
-    #einv-manual-fields.open{display:flex;}
-    .einv-field{display:flex;flex-direction:column;gap:4px;}
-    .einv-field label{font-size:12px;color:var(--muted);}
-    .einv-field input{
-      font-family:'IBM Plex Mono',monospace; font-size:14px;
-      padding:9px 10px; border-radius:8px; border:1px solid var(--line);
-      background:var(--bg); color:var(--ink);
-    }
-    .einv-field input:focus{outline:none;border-color:var(--accent);}
-  
     #einv-status{
       font-size:13px; line-height:1.6; padding:10px 12px;
       border-radius:8px; margin-bottom:12px; display:none;
@@ -62,6 +51,7 @@
     #einv-status.show{display:block;}
     #einv-status.info{background:var(--accent-soft);color:var(--accent);}
     #einv-status.error{background:var(--danger-soft);color:var(--danger);}
+    #einv-status.success{background:#E8F5E9;color:#2E7D32;}
   
     #reader-wrap {
       display: none; position: relative; margin-bottom: 12px;
@@ -84,7 +74,6 @@
     #einv-preview .row .v{font-family:'IBM Plex Mono',monospace;text-align:right;}
     #einv-preview .amt{font-size:20px;font-weight:600;}
     
-    /* 明細列表 UI */
     .item-list { margin-top: 10px; border-top: 2px solid var(--line); padding-top: 10px; }
     .item-row { display:flex; justify-content:space-between; font-size:12px; margin-bottom:6px; color:var(--ink); }
     .item-row .name { flex:1; padding-right:8px; }
@@ -98,7 +87,6 @@
     }
     .einv-summary .count{font-size:13px;color:var(--muted);}
     .einv-summary .total{font-size:22px;font-weight:600;}
-    .einv-summary .total span{font-size:13px;color:var(--muted);font-weight:400;margin-right:4px;}
   
     .einv-toolbar{display:flex;gap:14px;margin-bottom:14px;padding:0 2px;}
   
@@ -112,7 +100,6 @@
     .einv-card-date{font-size:12px;color:var(--muted);margin-top:2px;}
     .einv-card-amt{font-family:'IBM Plex Mono',monospace;font-size:18px;font-weight:600;text-align:right;}
     
-    /* 卡片內的明細折疊區 */
     .card-items { margin-top:10px; padding-top:10px; border-top:1px dashed var(--line); display:none; }
     .card-items.open { display:block; }
     .toggle-items-btn { font-size:12px; color:var(--accent); background:none; border:none; padding:0; cursor:pointer; margin-top:4px; }
@@ -145,8 +132,8 @@
 
 <div id="einv-app">
   <div class="einv-header">
-    <h1>發票掃描與明細讀取</h1>
-    <p>自動取得發票商品明細，並一鍵匯出為 Excel 格式或 JSON。</p>
+    <h1>全幅發票明細掃描</h1>
+    <p>請拍下「整張發票」，系統會自動同時讀取左右兩個 QR Code 並合併完整商品明細。</p>
   </div>
 
   <div id="einv-status"></div>
@@ -157,14 +144,15 @@
   </div>
 
   <div class="einv-actions">
+    <!-- 即時掃描維持單邊快速掃描 -->
     <button class="einv-btn primary" id="einv-btn-camera">📷 即時掃描</button>
-    <button class="einv-btn" id="einv-btn-photo">🖼 拍照 / 選圖</button>
+    <!-- 拍照選圖升級為雙重解析引擎 -->
+    <button class="einv-btn" id="einv-btn-photo">🖼 拍整張發票 / 選圖</button>
   </div>
 
   <div class="einv-panel" id="einv-preview">
     <h3>掃描結果</h3>
     <div id="einv-preview-body"></div>
-    <!-- 預覽明細區塊 -->
     <div class="item-list" id="einv-preview-items"></div>
     <div id="einv-preview-actions">
       <button class="einv-btn primary" id="einv-btn-confirm-add">加入清單</button>
@@ -183,7 +171,7 @@
 
   <div class="einv-toolbar">
     <button class="einv-btn text" id="einv-btn-copy-tsv">匯出 Excel 表格</button>
-    <button class="einv-btn text" id="einv-btn-copy-json">匯出 JSON 檔</button>
+    <button class="einv-btn text" id="einv-btn-copy-json">匯出 JSON</button>
     <button class="einv-btn danger-text" id="einv-btn-clear">清空全部</button>
   </div>
 
@@ -232,11 +220,8 @@
   function fmtMoney(n){ return Number(n || 0).toLocaleString('zh-TW'); }
 
   function loadInvoices(){
-    try{
-      var res = localStorage.getItem(STORAGE_KEY);
-      if(res) invoices = JSON.parse(res);
-    }catch(e){ invoices = []; }
-    render();
+    try{ var res = localStorage.getItem(STORAGE_KEY); if(res) invoices = JSON.parse(res); }
+    catch(e){ invoices = []; } render();
   }
 
   function saveInvoices(){
@@ -245,92 +230,116 @@
   }
 
   // ==========================================
-  // 【核心區塊】獲取發票明細 (API vs QR 本地解析)
+  // 【核心黑科技】多重 QR 縫合與明細萃取邏輯
   // ==========================================
-  async function fetchInvoiceDetails(record) {
-    // 1. 這裡為真實打 API 的架構 (目前被註解，作為日後接上 Backend Proxy 使用)
-    /*
-    try {
-      // 轉換日期為財政部格式 (民國雙數月期別)
-      let rocYear = parseInt(record.dateISO.split('-')[0]) - 1911;
-      let month = record.dateISO.split('-')[1];
-      let termMonth = Math.ceil(parseInt(month) / 2) * 2;
-      let invTerm = rocYear + String(termMonth).padStart(2, '0'); // 例如 11308
+  function parseMergedQR(qrStrings) {
+    // 1. 分辨左右 QR Code
+    let leftQR = qrStrings.find(q => /^[A-Za-z]{2}\d{8}/.test(q)) || "";
+    let rightQR = qrStrings.find(q => /^\*\*/.test(q)) || "";
 
-      let url = "你的_BACKEND_PROXY_URL_解決_CORS"; 
-      let params = new URLSearchParams({
-        version: "0.5", type: "Barcode", action: "qrcodeInvNum", generation: "V2",
-        invNum: record.invoiceNumber, invTerm: invTerm, 
-        invDate: record.dateISO.replace(/-/g, '/'), encrypt: record.randomCode,
-        appID: "你的_財政部_APP_ID", UUID: "WEB_CLIENT"
-      });
+    if (!leftQR) {
+        throw new Error("無法識別主(左側) QR Code。若是整張發票，請確保相片清晰無反光。");
+    }
 
-      let response = await fetch(url, { method: 'POST', body: params });
-      let data = await response.json();
-      if (data.code === '200' && data.details) {
-        return data.details.map(item => ({ name: item.description, qty: item.quantity, price: item.unitPrice }));
-      }
-    } catch(e) { console.warn("API 請求失敗，切換為本地解析備案", e); }
-    */
+    // 2. 進行字串縫合 (去除右邊開頭的 **)
+    let fullText = leftQR.replace(/\s+/g, '');
+    if (rightQR) {
+        fullText += rightQR.replace(/\s+/g, '').replace(/^\*\*/, '');
+    }
 
-    // 2. 本地解析備案：從左側 QR Code 第 77 碼後的隱藏資料切出明細
-    var text = (record.raw || '').replace(/\s+/g, '');
-    if(text.length > 77 && text.slice(77).startsWith(':')) {
-      var parts = text.slice(77).split(':');
-      var items = [];
-      // 台灣發票格式：明細通常從 index 6 開始，每 3 個一組 (品名, 數量, 單價)
-      for(var i = 6; i < parts.length - 2; i += 3) {
-        if (parts[i]) {
-          items.push({ name: parts[i], qty: parts[i+1], price: parts[i+2] });
+    // 3. 解析標頭檔 (前 77 碼)
+    let invoiceNumber = fullText.slice(0, 10);
+    let dateStr = fullText.slice(10, 17);
+    let dateISO = (parseInt(dateStr.slice(0, 3)) + 1911) + '-' + dateStr.slice(3, 5) + '-' + dateStr.slice(5, 7);
+    let randomCode = fullText.slice(17, 21);
+    let totalAmount = parseInt(fullText.slice(29, 37), 16);
+
+    // 4. 解析全幅消費明細
+    let items = [];
+    let tail = fullText.slice(77);
+    
+    if (tail.startsWith(':')) {
+      let parts = tail.split(':');
+      
+      // 根據台灣發票規格，商品明細固定從 index 5 之後開始，每 3 碼為一組 (品名:數量:單價)
+      // 格式：:[編碼]:[總筆數]:[總QR數]:[當前QR]:[品名]:[數量]:[單價]:...
+      for(let i = 5; i < parts.length - 2; i += 3) {
+        if (parts[i] && parts[i] !== "") {
+          items.push({
+            name: parts[i], 
+            qty: parts[i+1] || "1", 
+            price: parts[i+2] || "0"
+          });
         }
       }
-      return items;
     }
-    return [];
-  }
-
-  // ---------- 發票本體解析邏輯 ----------
-  function parseLeftQR(raw){
-    var text = (raw || '').replace(/\s+/g, '');
-    if(text.length < 77) throw new Error('內容長度不足，請掃描發票左側的 QR Code。');
-    
-    var invoiceNumber = text.slice(0, 10);
-    if(!/^[A-Za-z]{2}\d{8}$/.test(invoiceNumber)) throw new Error('發票號碼格式不正確。');
-    
-    var dateStr = text.slice(10, 17);
-    var rocYear = parseInt(dateStr.slice(0, 3), 10);
-    var month = dateStr.slice(3, 5);
-    var day = dateStr.slice(5, 7);
-    var dateISO = (rocYear + 1911) + '-' + month.padStart(2, '0') + '-' + day.padStart(2, '0');
-    
-    var randomCode = text.slice(17, 21);
-    var salesHex = text.slice(21, 29);
-    var totalHex = text.slice(29, 37);
 
     return {
       id: 'inv_' + Date.now(),
-      invoiceNumber: invoiceNumber, dateISO: dateISO, randomCode: randomCode, 
-      salesAmount: parseInt(salesHex, 16), totalAmount: parseInt(totalHex, 16), raw: text, items: []
+      invoiceNumber: invoiceNumber, 
+      dateISO: dateISO, 
+      randomCode: randomCode, 
+      totalAmount: totalAmount, 
+      items: items,
+      hasRightQR: rightQR !== "" // 標記是否成功縫合
     };
   }
 
-  // ---------- 介面渲染 ----------
-  async function processScannedData(rawText) {
-    try {
-      showStatus('正在讀取發票與消費明細...', 'info');
-      var record = parseLeftQR(rawText);
-      
-      // 觸發 API / 本地解析函數獲取明細
-      var items = await fetchInvoiceDetails(record);
-      record.items = items;
-      
-      hideStatus();
-      showPreview(record);
-    } catch (err) {
-      showStatus(err.message, 'error');
-    }
-  }
+  // ==========================================
+  // 圖片上傳 (呼叫 Chrome 原生 BarcodeDetector)
+  // ==========================================
+  els.fileInput.addEventListener('change', async function(e){
+    var file = e.target.files && e.target.files[0]; e.target.value = ''; if(!file) return;
+    
+    hideStatus(); hidePreview(); 
+    showStatus('正在啟動多重條碼深度解析引擎...', 'info');
 
+    // 將檔案轉成 Image 物件以供偵測
+    const img = new Image();
+    const url = URL.createObjectURL(file);
+    
+    img.onload = async () => {
+      try {
+        // 檢查瀏覽器是否支援最新的原生 BarcodeDetector
+        if ('BarcodeDetector' in window) {
+          const detector = new BarcodeDetector({ formats: ['qr_code'] });
+          const barcodes = await detector.detect(img);
+          
+          if (barcodes.length === 0) {
+            throw new Error("找不到任何 QR Code，請確認發票平整且光線充足。");
+          }
+
+          // 取出所有偵測到的 QR 文字
+          const qrStrings = barcodes.map(b => b.rawValue);
+          const record = parseMergedQR(qrStrings);
+          
+          if(record.hasRightQR) {
+            showStatus('🎉 成功縫合雙 QR Code！已取得完整明細。', 'success');
+          } else {
+            showStatus('⚠️ 只掃描到左側 QR Code，明細可能不完整。', 'info');
+          }
+          
+          showPreview(record);
+
+        } else {
+          // 如果瀏覽器不支援原生 API (例如舊版或 iOS)，降級使用 html5-qrcode
+          showStatus('目前環境不支援多重掃描，將退回單一掃描模式。', 'info');
+          if (!html5QrCode) html5QrCode = new Html5Qrcode("reader");
+          const decodedText = await html5QrCode.scanFile(file, true);
+          const record = parseMergedQR([decodedText]);
+          showPreview(record);
+        }
+      } catch (err) {
+        showStatus(err.message || "解析失敗，請確認相片清晰。", 'error');
+      } finally {
+        URL.revokeObjectURL(url);
+      }
+    };
+    img.onerror = () => showStatus('圖片載入失敗', 'error');
+    img.src = url;
+  });
+
+  // ---------- 介面渲染 ----------
   function showPreview(record){
     pendingRecord = record;
     var rows = [
@@ -342,9 +351,8 @@
     var html = rows.map(r => `<div class="row"><span class="k">${r[0]}</span><span class="${r[3] ? 'v amt' : 'v'}">${r[1]}</span></div>`).join('');
     els.previewBody.innerHTML = html;
 
-    // 渲染明細
     if(record.items && record.items.length > 0) {
-      var itemsHtml = '<div style="font-size:12px; font-weight:600; margin-bottom:6px;">消費明細 (' + record.items.length + '項)</div>';
+      var itemsHtml = `<div style="font-size:12px; font-weight:600; margin-bottom:6px;">消費明細 (${record.items.length}項)</div>`;
       record.items.forEach(item => {
         itemsHtml += `<div class="item-row"><div class="name">${item.name}</div><div class="qty-price">${item.qty} x ${item.price}</div></div>`;
       });
@@ -365,7 +373,6 @@
     var existingIndex = invoices.findIndex(inv => inv.invoiceNumber === pendingRecord.invoiceNumber);
     if(existingIndex >= 0){
       if(!window.confirm('此發票號碼已存在，是否要覆蓋？')){ hidePreview(); return; }
-      pendingRecord.id = invoices[existingIndex].id;
       invoices[existingIndex] = pendingRecord;
     }else{
       invoices.unshift(pendingRecord);
@@ -384,7 +391,7 @@
     var html = invoices.map(inv => {
       var itemHtml = '';
       if(inv.items && inv.items.length > 0) {
-        itemHtml = `<button class="toggle-items-btn" onclick="this.nextElementSibling.classList.toggle('open')">查看明細 (${inv.items.length}) ▼</button>` + 
+        itemHtml = `<button class="toggle-items-btn" onclick="this.nextElementSibling.classList.toggle('open')">查看完整明細 (${inv.items.length}) ▼</button>` + 
                    `<div class="card-items">` + 
                    inv.items.map(item => `<div class="item-row"><div class="name">${item.name}</div><div class="qty-price">${item.qty} x ${item.price}</div></div>`).join('') +
                    `</div>`;
@@ -409,61 +416,50 @@
     if(idx >= 0 && window.confirm('確定要刪除此筆紀錄嗎？')){ invoices.splice(idx, 1); render(); saveInvoices(); }
   });
 
-  // ---------- 相機與選圖模組 ----------
+  // ---------- 單邊即時掃描模組 (備用) ----------
   function initScanner() { if (!html5QrCode) html5QrCode = new Html5Qrcode("reader"); }
-
   function startCamera(){
     hidePreview(); hideStatus(); initScanner();
     if (html5QrCode.isScanning) return;
 
     els.readerWrap.classList.add('open');
     html5QrCode.start({ facingMode: "environment" }, { fps: 10, qrbox: { width: 250, height: 250 } },
-      function(decodedText) { stopCamera(); processScannedData(decodedText); },
-      function(errorMessage) { /* 忽略單幀辨識失敗 */ }
+      function(decodedText) { 
+        try {
+          const record = parseMergedQR([decodedText]);
+          stopCamera(); showPreview(record);
+        } catch(e) {}
+      },
+      function(errorMessage) {}
     ).catch(err => {
       els.readerWrap.classList.remove('open');
       showStatus('相機啟動失敗，請確認已授權使用相機，且網頁已透過 HTTPS 開啟。', 'error');
     });
   }
-
   function stopCamera(){
     if(html5QrCode && html5QrCode.isScanning){
-      html5QrCode.stop().then(() => els.readerWrap.classList.remove('open')).catch(err => els.readerWrap.classList.remove('open'));
+      html5QrCode.stop().then(() => els.readerWrap.classList.remove('open')).catch(e => els.readerWrap.classList.remove('open'));
     } else { els.readerWrap.classList.remove('open'); }
   }
 
-  els.fileInput.addEventListener('change', async function(e){
-    var file = e.target.files && e.target.files[0]; e.target.value = ''; if(!file) return;
-    hideStatus(); hidePreview(); showStatus('正在解析圖片...', 'info'); initScanner();
-    try {
-      const decodedText = await html5QrCode.scanFile(file, true);
-      processScannedData(decodedText);
-    } catch (err) { showStatus('找不到 QR Code！請確保照片清晰。', 'error'); }
-  });
-
-  // ---------- 匯出成 JSON 與 Excel TSV 文字 ----------
+  // ---------- 匯出模組 ----------
   function openCopyModal(title, text){
     els.copyTitle.textContent = title; els.copyText.value = text;
     els.copyModal.classList.add('open'); els.copyText.select();
   }
-
   document.getElementById('einv-btn-copy-tsv').addEventListener('click', () => {
     if(invoices.length === 0) return showStatus('清單目前是空的。', 'error');
-    // 展開式匯出：如果發票有明細，就逐行印出明細；沒有則印總額
-    var header = ['發票號碼', '開立日期', '隨機碼', '總金額', '品名', '數量', '單價'].join('\t');
+    var header = ['發票號碼', '開立日期', '總金額', '品名', '數量', '單價'].join('\t');
     var rows = [];
     invoices.forEach(inv => {
       if(inv.items && inv.items.length > 0) {
         inv.items.forEach(item => {
-          rows.push([inv.invoiceNumber, inv.dateISO, inv.randomCode, inv.totalAmount, item.name, item.qty, item.price].join('\t'));
+          rows.push([inv.invoiceNumber, inv.dateISO, inv.totalAmount, item.name, item.qty, item.price].join('\t'));
         });
-      } else {
-        rows.push([inv.invoiceNumber, inv.dateISO, inv.randomCode, inv.totalAmount, '無明細資料', '', ''].join('\t'));
-      }
+      } else { rows.push([inv.invoiceNumber, inv.dateISO, inv.totalAmount, '無明細資料', '', ''].join('\t')); }
     });
     openCopyModal('貼上至 Excel 的文字', [header].concat(rows).join('\n'));
   });
-
   document.getElementById('einv-btn-copy-json').addEventListener('click', () => {
     if(invoices.length === 0) return showStatus('清單目前是空的。', 'error');
     openCopyModal('JSON 資料', JSON.stringify(invoices, null, 2));
@@ -477,7 +473,6 @@
   document.getElementById('einv-btn-discard').addEventListener('click', hidePreview);
   document.getElementById('einv-btn-close-copy').addEventListener('click', () => els.copyModal.classList.remove('open'));
   document.getElementById('einv-btn-clear').addEventListener('click', () => { if(window.confirm('確定清空？')){ invoices = []; render(); saveInvoices(); }});
-  
   document.getElementById('einv-btn-do-copy').addEventListener('click', async () => {
     await navigator.clipboard.writeText(els.copyText.value);
     document.getElementById('einv-btn-do-copy').textContent = '已複製';
